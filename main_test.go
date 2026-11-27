@@ -6,51 +6,51 @@ import (
 	"testing"
 )
 
-func TestLimpiarNombre(t *testing.T) {
-	casos := map[string]string{
-		"AC/DC":            "AC-DC",
-		"Back: In Black":   "Back - In Black",
-		`Rock "n" Roll`:    "Rock 'n' Roll",
-		"  muchos   espacios  ": "muchos espacios",
-		"punto final.":     "punto final",
-		"a*b?c":            "axbc",
+func TestCleanName(t *testing.T) {
+	cases := map[string]string{
+		"AC/DC":             "AC-DC",
+		"Back: In Black":    "Back - In Black",
+		`Rock "n" Roll`:     "Rock 'n' Roll",
+		"  many   spaces  ": "many spaces",
+		"trailing dot.":     "trailing dot",
+		"a*b?c":             "axbc",
 	}
-	for entrada, esperado := range casos {
-		if obtenido := limpiarNombre(entrada); obtenido != esperado {
-			t.Errorf("limpiarNombre(%q) = %q, se esperaba %q", entrada, obtenido, esperado)
+	for input, want := range cases {
+		if got := cleanName(input); got != want {
+			t.Errorf("cleanName(%q) = %q, want %q", input, got, want)
 		}
 	}
 }
 
-func TestNormalizarNombreReservados(t *testing.T) {
-	if got := normalizarNombre("CON"); got != "_CON" {
-		t.Errorf("normalizarNombre(\"CON\") = %q, se esperaba \"_CON\"", got)
+func TestNormalizeNameReserved(t *testing.T) {
+	if got := normalizeName("CON"); got != "_CON" {
+		t.Errorf("normalizeName(\"CON\") = %q, want \"_CON\"", got)
 	}
-	if got := normalizarNombre("nul.mp3"); got != "_nul.mp3" {
-		t.Errorf("normalizarNombre(\"nul.mp3\") = %q, se esperaba \"_nul.mp3\"", got)
+	if got := normalizeName("nul.mp3"); got != "_nul.mp3" {
+		t.Errorf("normalizeName(\"nul.mp3\") = %q, want \"_nul.mp3\"", got)
 	}
-	if got := normalizarNombre("   "); got != "_" {
-		t.Errorf("normalizarNombre vacío = %q, se esperaba \"_\"", got)
-	}
-}
-
-func TestDesdeNombreArchivo(t *testing.T) {
-	if a, ti := desdeNombreArchivo("Daft Punk - Get Lucky.mp3"); a != "Daft Punk" || ti != "Get Lucky" {
-		t.Errorf("desdeNombreArchivo = (%q, %q)", a, ti)
-	}
-	if a, ti := desdeNombreArchivo("Daft Punk - Get Lucky - Remix.flac"); a != "Daft Punk" || ti != "Get Lucky - Remix" {
-		t.Errorf("desdeNombreArchivo = (%q, %q)", a, ti)
-	}
-	if a, ti := desdeNombreArchivo("sintitulo.mp3"); a != "" || ti != "" {
-		t.Errorf("desdeNombreArchivo sin separador = (%q, %q)", a, ti)
+	if got := normalizeName("   "); got != "_" {
+		t.Errorf("normalizeName(empty) = %q, want \"_\"", got)
 	}
 }
 
-func TestYaNombrado(t *testing.T) {
+func TestFromFileName(t *testing.T) {
+	if a, ti := fromFileName("Daft Punk - Get Lucky.mp3"); a != "Daft Punk" || ti != "Get Lucky" {
+		t.Errorf("fromFileName = (%q, %q)", a, ti)
+	}
+	if a, ti := fromFileName("Daft Punk - Get Lucky - Remix.flac"); a != "Daft Punk" || ti != "Get Lucky - Remix" {
+		t.Errorf("fromFileName = (%q, %q)", a, ti)
+	}
+	if a, ti := fromFileName("untitled.mp3"); a != "" || ti != "" {
+		t.Errorf("fromFileName without separator = (%q, %q)", a, ti)
+	}
+}
+
+func TestAlreadyNamed(t *testing.T) {
 	dir := t.TempDir()
-	casos := []struct {
-		actual, destino string
-		esperado        bool
+	cases := []struct {
+		current, target string
+		want            bool
 	}{
 		{"Daft Punk - Get Lucky.mp3", "Daft Punk - Get Lucky.mp3", true},
 		{"daft punk - get lucky.MP3", "Daft Punk - Get Lucky.mp3", true},
@@ -59,43 +59,43 @@ func TestYaNombrado(t *testing.T) {
 		{"track01.mp3", "Daft Punk - Get Lucky.mp3", false},
 		{"Daft Punk - Get Lucky (2).flac", "Daft Punk - Get Lucky.mp3", false},
 	}
-	for _, c := range casos {
-		actual := filepath.Join(dir, c.actual)
-		destino := filepath.Join(dir, c.destino)
-		if got := yaNombrado(actual, destino); got != c.esperado {
-			t.Errorf("yaNombrado(%q, %q) = %v, se esperaba %v", c.actual, c.destino, got, c.esperado)
+	for _, c := range cases {
+		current := filepath.Join(dir, c.current)
+		target := filepath.Join(dir, c.target)
+		if got := alreadyNamed(current, target); got != c.want {
+			t.Errorf("alreadyNamed(%q, %q) = %v, want %v", c.current, c.target, got, c.want)
 		}
 	}
 }
 
-func TestNombreLibreNoSobrescribe(t *testing.T) {
+func TestFreeNameDoesNotOverwrite(t *testing.T) {
 	dir := t.TempDir()
-	destino := filepath.Join(dir, "Artista - Tema.mp3")
-	if err := os.WriteFile(destino, []byte("x"), 0o644); err != nil {
+	target := filepath.Join(dir, "Artist - Song.mp3")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	usados := map[string]bool{}
-	libre := nombreLibre(destino, usados)
-	if filepath.Base(libre) != "Artista - Tema (2).mp3" {
-		t.Errorf("nombreLibre = %q, se esperaba \"Artista - Tema (2).mp3\"", filepath.Base(libre))
+	used := map[string]bool{}
+	free := freeName(target, used)
+	if filepath.Base(free) != "Artist - Song (2).mp3" {
+		t.Errorf("freeName = %q, want \"Artist - Song (2).mp3\"", filepath.Base(free))
 	}
 
-	// Un segundo archivo con el mismo nombre debe recibir (3).
-	if segundo := nombreLibre(destino, usados); filepath.Base(segundo) != "Artista - Tema (3).mp3" {
-		t.Errorf("segundo nombreLibre = %q, se esperaba \"Artista - Tema (3).mp3\"", filepath.Base(segundo))
+	// A second file with the same name must get (3).
+	if second := freeName(target, used); filepath.Base(second) != "Artist - Song (3).mp3" {
+		t.Errorf("second freeName = %q, want \"Artist - Song (3).mp3\"", filepath.Base(second))
 	}
 }
 
-func TestReordenarArgs(t *testing.T) {
-	got := reordenarArgs([]string{"carpeta", "--dry-run", "-r"})
-	esperado := []string{"--dry-run", "-r", "carpeta"}
-	if len(got) != len(esperado) {
-		t.Fatalf("reordenarArgs = %v, se esperaba %v", got, esperado)
+func TestReorderArgs(t *testing.T) {
+	got := reorderArgs([]string{"folder", "--dry-run", "-r"})
+	want := []string{"--dry-run", "-r", "folder"}
+	if len(got) != len(want) {
+		t.Fatalf("reorderArgs = %v, want %v", got, want)
 	}
 	for i := range got {
-		if got[i] != esperado[i] {
-			t.Fatalf("reordenarArgs = %v, se esperaba %v", got, esperado)
+		if got[i] != want[i] {
+			t.Fatalf("reorderArgs = %v, want %v", got, want)
 		}
 	}
 }

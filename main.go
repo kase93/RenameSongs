@@ -1,5 +1,5 @@
-// RenameSongs renombra archivos de audio a "Artista - Título.ext"
-// usando los metadatos incrustados en cada archivo.
+// RenameSongs renames audio files to "Artist - Title.ext" using the
+// metadata embedded in each file.
 package main
 
 import (
@@ -16,19 +16,20 @@ import (
 )
 
 const (
-	nombreApp = "renombrar_canciones"
-	version   = "1.1.0"
+	appName = "renombrar_canciones"
+	version = "1.1.0"
 )
 
-// Extensiones de audio que intentamos procesar.
-var extensionesValidas = map[string]bool{
+// validExtensions lists the audio formats we attempt to process.
+var validExtensions = map[string]bool{
 	".mp3": true, ".flac": true, ".m4a": true, ".mp4": true,
 	".ogg": true, ".oga": true, ".opus": true, ".wav": true,
 	".aac": true, ".wma": true, ".aiff": true, ".ape": true,
 }
 
-// Sustituciones de caracteres no permitidos en nombres de archivo (Windows).
-var sustituciones = map[string]string{
+// replacements maps characters that are invalid in file names (Windows is
+// the most restrictive) to visually similar substitutes.
+var replacements = map[string]string{
 	"\\": "-",
 	"/":  "-",
 	":":  " -",
@@ -41,16 +42,17 @@ var sustituciones = map[string]string{
 }
 
 var (
-	reControl  = regexp.MustCompile(`[\x00-\x1f\x7f]`)
-	reEspacios = regexp.MustCompile(`\s+`)
-	reGuiones  = regexp.MustCompile(`\s+-\s+`)
-	// Coincide con nombres como "Nombre (2)", "Nombre (12)".
-	reSufijoNumerado  = regexp.MustCompile(`^.+?\s+\(\d+\)$`)
-	subSufijoNumerado = regexp.MustCompile(`\s+\(\d+\)$`)
+	controlChars = regexp.MustCompile(`[\x00-\x1f\x7f]`)
+	spaces       = regexp.MustCompile(`\s+`)
+	dashes       = regexp.MustCompile(`\s+-\s+`)
+
+	// Matches names such as "Name (2)" or "Name (12)".
+	numberedSuffix      = regexp.MustCompile(`^.+?\s+\(\d+\)$`)
+	numberedSuffixStrip = regexp.MustCompile(`\s+\(\d+\)$`)
 )
 
-// Nombres reservados por Windows (CON, PRN, AUX, NUL, COM1..9, LPT1..9).
-var nombresReservados = map[string]bool{
+// reservedNames are device names Windows refuses to use for files.
+var reservedNames = map[string]bool{
 	"CON": true, "PRN": true, "AUX": true, "NUL": true,
 	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
 	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
@@ -59,68 +61,70 @@ var nombresReservados = map[string]bool{
 }
 
 func main() {
-	dryRun := flag.Bool("dry-run", false, "muestra los cambios sin renombrar (alias: -n)")
-	dryRunCorto := flag.Bool("n", false, "alias de --dry-run")
-	recursivo := flag.Bool("recursive", false, "procesa también las subcarpetas (alias: -r)")
-	recursivoCorto := flag.Bool("r", false, "alias de --recursive")
-	mostrarVersion := flag.Bool("version", false, "muestra la versión y sale")
+	dryRun := flag.Bool("dry-run", false, "show the changes without renaming (alias: -n)")
+	dryRunShort := flag.Bool("n", false, "alias of --dry-run")
+	recursive := flag.Bool("recursive", false, "also process subfolders (alias: -r)")
+	recursiveShort := flag.Bool("r", false, "alias of --recursive")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Uso: %s [carpeta] [--dry-run] [--recursive]\n", nombreApp)
-		fmt.Fprintln(flag.CommandLine.Output(), "Sin carpeta usa Descargas.")
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [folder] [--dry-run] [--recursive]\n", appName)
+		fmt.Fprintln(flag.CommandLine.Output(), "Without a folder, uses Downloads.")
 		flag.PrintDefaults()
 	}
 
-	// Permite escribir las opciones antes o después de la carpeta:
-	// el paquete flag deja de leer opciones en el primer argumento posicional.
-	if err := flag.CommandLine.Parse(reordenarArgs(os.Args[1:])); err != nil {
+	// Allow options before or after the folder: the flag package stops
+	// parsing at the first positional argument.
+	if err := flag.CommandLine.Parse(reorderArgs(os.Args[1:])); err != nil {
 		os.Exit(2)
 	}
 
-	if *mostrarVersion {
-		fmt.Printf("%s %s\n", nombreApp, version)
+	if *showVersion {
+		fmt.Printf("%s %s\n", appName, version)
 		return
 	}
 
-	carpeta := flag.Arg(0)
-	sinCarpeta := carpeta == ""
-	if sinCarpeta {
-		carpeta = carpetaDescargas()
+	folder := flag.Arg(0)
+	noFolder := folder == ""
+	if noFolder {
+		folder = downloadsFolder()
 	}
 
-	fmt.Printf("Carpeta: %s\n\n", carpeta)
+	fmt.Printf("Folder: %s\n\n", folder)
 
-	est := procesar(carpeta, *dryRun || *dryRunCorto, *recursivo || *recursivoCorto)
+	stats := process(folder, *dryRun || *dryRunShort, *recursive || *recursiveShort)
 
-	fmt.Printf("\nResumen: %d renombrados, %d omitidos, %d errores\n",
-		est.renombrados, est.omitidos, est.errores)
+	fmt.Printf("\nSummary: %d renamed, %d skipped, %d errors\n",
+		stats.renamed, stats.skipped, stats.errors)
 
-	// Pausa al ejecutar con doble clic (sin carpeta) para que la consola no se
-	// cierre antes de leer el resultado; no bloquea si stdin no es interactivo.
-	if sinCarpeta {
-		pausa()
+	// Pause when launched by double click (no folder argument) so the console
+	// does not close before the result can be read. Skipped when stdin is not
+	// interactive.
+	if noFolder {
+		pause()
 	}
 
-	if est.errores > 0 {
+	if stats.errors > 0 {
 		os.Exit(1)
 	}
 }
 
-// reordenarArgs coloca las opciones delante para que flag las reconozca
-// aunque se escriban después de la carpeta.
-func reordenarArgs(args []string) []string {
-	opciones := make([]string, 0, len(args))
-	posicionales := make([]string, 0, len(args))
+// reorderArgs moves options to the front so flag recognizes them even when
+// they are written after the folder.
+func reorderArgs(args []string) []string {
+	options := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
 	for _, a := range args {
 		if strings.HasPrefix(a, "-") && a != "-" {
-			opciones = append(opciones, a)
+			options = append(options, a)
 			continue
 		}
-		posicionales = append(posicionales, a)
+		positionals = append(positionals, a)
 	}
-	return append(opciones, posicionales...)
+	return append(options, positionals...)
 }
 
-func carpetaDescargas() string {
+// downloadsFolder returns the current user's Downloads folder.
+func downloadsFolder() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "."
@@ -128,238 +132,240 @@ func carpetaDescargas() string {
 	return filepath.Join(home, "Downloads")
 }
 
-// limpiarNombre sustituye caracteres no válidos y normaliza espacios.
-func limpiarNombre(texto string) string {
-	texto = strings.TrimSpace(texto)
-	for original, sustituto := range sustituciones {
-		texto = strings.ReplaceAll(texto, original, sustituto)
+// cleanName replaces characters that are invalid in file names and
+// normalizes whitespace.
+func cleanName(text string) string {
+	text = strings.TrimSpace(text)
+	for original, substitute := range replacements {
+		text = strings.ReplaceAll(text, original, substitute)
 	}
-	texto = reControl.ReplaceAllString(texto, "")
-	texto = reEspacios.ReplaceAllString(texto, " ")
-	texto = strings.Trim(texto, " .")
-	return texto
+	text = controlChars.ReplaceAllString(text, "")
+	text = spaces.ReplaceAllString(text, " ")
+	text = strings.Trim(text, " .")
+	return text
 }
 
-// normalizarNombre limpia y evita nombres reservados o vacíos.
-func normalizarNombre(texto string) string {
-	texto = limpiarNombre(texto)
-	if texto == "" {
+// normalizeName cleans the text and avoids empty or reserved file names.
+func normalizeName(text string) string {
+	text = cleanName(text)
+	if text == "" {
 		return "_"
 	}
-	base := strings.ToUpper(texto)
+	base := strings.ToUpper(text)
 	if i := strings.IndexByte(base, '.'); i >= 0 {
 		base = base[:i]
 	}
-	if nombresReservados[base] {
-		texto = "_" + texto
+	if reservedNames[base] {
+		text = "_" + text
 	}
-	return texto
+	return text
 }
 
-// limitarNombre recorta el nombre para no superar el límite de Windows (255 bytes).
-func limitarNombre(nombre string) string {
-	const limite = 255
-	if len(nombre) <= limite {
-		return nombre
+// limitName shortens the name so it does not exceed the Windows limit
+// (255 bytes).
+func limitName(name string) string {
+	const limit = 255
+	if len(name) <= limit {
+		return name
 	}
-	ext := filepath.Ext(nombre)
-	base := strings.TrimSuffix(nombre, ext)
-	presupuesto := limite - len(ext)
-	for len(base) > presupuesto {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	budget := limit - len(ext)
+	for len(base) > budget {
 		_, size := utf8.DecodeLastRuneInString(base)
 		base = base[:len(base)-size]
 	}
 	return strings.Trim(base, " .") + ext
 }
 
-type estado struct {
-	renombrados, omitidos, errores int
+type stats struct {
+	renamed, skipped, errors int
 }
 
-// procesar recorre la carpeta y renombra los archivos de audio encontrados.
-func procesar(carpeta string, dryRun, recursivo bool) estado {
-	var est estado
+// process walks the folder and renames the audio files it finds.
+func process(folder string, dryRun, recursive bool) stats {
+	var result stats
 
-	info, err := os.Stat(carpeta)
+	info, err := os.Stat(folder)
 	if err != nil || !info.IsDir() {
-		fmt.Printf("La carpeta no existe o no se puede leer: %s\n", carpeta)
-		est.errores++
-		return est
+		fmt.Printf("Folder does not exist or cannot be read: %s\n", folder)
+		result.errors++
+		return result
 	}
 
-	var archivos []string
-	agregar := func(ruta string, info os.FileInfo, err error) error {
+	var files []string
+	collect := func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			fmt.Printf("⚠ No se pudo acceder a %s: %v\n", ruta, err)
-			est.errores++
+			fmt.Printf("⚠ Cannot access %s: %v\n", path, err)
+			result.errors++
 			return nil
 		}
 		if info.IsDir() {
-			if !recursivo && ruta != carpeta {
+			if !recursive && path != folder {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if extensionesValidas[strings.ToLower(filepath.Ext(ruta))] {
-			archivos = append(archivos, ruta)
+		if validExtensions[strings.ToLower(filepath.Ext(path))] {
+			files = append(files, path)
 		}
 		return nil
 	}
 
-	if err := filepath.Walk(carpeta, agregar); err != nil {
-		fmt.Printf("Error recorriendo la carpeta: %v\n", err)
-		est.errores++
-		return est
+	if err := filepath.Walk(folder, collect); err != nil {
+		fmt.Printf("Error walking the folder: %v\n", err)
+		result.errors++
+		return result
 	}
 
-	if len(archivos) == 0 {
-		fmt.Println("No se encontraron archivos de audio en la carpeta.")
-		return est
+	if len(files) == 0 {
+		fmt.Println("No audio files found in the folder.")
+		return result
 	}
 
-	// Reserva de nombres destino ya usados en esta ejecución (comparación sin distinguir mayúsculas).
-	usados := map[string]bool{}
+	// Target names already claimed during this run (case-insensitive).
+	used := map[string]bool{}
 
-	for _, ruta := range archivos {
-		artista, titulo, err := extraer(ruta)
+	for _, path := range files {
+		artist, title, err := extract(path)
 		if err != nil {
-			fmt.Printf("⚠ No se pudo leer %s: %v\n", filepath.Base(ruta), err)
-			est.errores++
+			fmt.Printf("⚠ Could not read %s: %v\n", filepath.Base(path), err)
+			result.errors++
 			continue
 		}
-		if artista == "" || titulo == "" {
-			fmt.Printf("✗ Sin metadatos suficientes, se omite: %s\n", filepath.Base(ruta))
-			est.omitidos++
-			continue
-		}
-
-		ext := strings.ToLower(filepath.Ext(ruta))
-		nombre := limitarNombre(fmt.Sprintf("%s - %s%s",
-			normalizarNombre(artista), normalizarNombre(titulo), ext))
-		destino := filepath.Join(filepath.Dir(ruta), nombre)
-
-		if yaNombrado(ruta, destino) {
-			est.omitidos++
+		if artist == "" || title == "" {
+			fmt.Printf("✗ Not enough metadata, skipping: %s\n", filepath.Base(path))
+			result.skipped++
 			continue
 		}
 
-		destino = nombreLibre(destino, usados)
+		ext := strings.ToLower(filepath.Ext(path))
+		name := limitName(fmt.Sprintf("%s - %s%s",
+			normalizeName(artist), normalizeName(title), ext))
+		destination := filepath.Join(filepath.Dir(path), name)
+
+		if alreadyNamed(path, destination) {
+			result.skipped++
+			continue
+		}
+
+		destination = freeName(destination, used)
 
 		if dryRun {
-			fmt.Printf("[Simulación] %s  ->  %s\n", filepath.Base(ruta), filepath.Base(destino))
-			est.renombrados++
+			fmt.Printf("[Dry run] %s  ->  %s\n", filepath.Base(path), filepath.Base(destination))
+			result.renamed++
 			continue
 		}
 
-		if err := os.Rename(ruta, destino); err != nil {
-			fmt.Printf("⚠ Error al renombrar %s: %v\n", filepath.Base(ruta), err)
-			est.errores++
+		if err := os.Rename(path, destination); err != nil {
+			fmt.Printf("⚠ Error renaming %s: %v\n", filepath.Base(path), err)
+			result.errors++
 			continue
 		}
-		fmt.Printf("✓ Renombrado: %s  ->  %s\n", filepath.Base(ruta), filepath.Base(destino))
-		est.renombrados++
+		fmt.Printf("✓ Renamed: %s  ->  %s\n", filepath.Base(path), filepath.Base(destination))
+		result.renamed++
 	}
 
-	return est
+	return result
 }
 
-// extraer devuelve artista y título desde los metadatos; si faltan, intenta
-// deducirlos del nombre actual del archivo ("Artista - Título.ext").
-func extraer(ruta string) (string, string, error) {
-	var artista, titulo string
+// extract returns artist and title from the tags; when they are missing it
+// falls back to parsing the current file name ("Artist - Title.ext").
+func extract(path string) (string, string, error) {
+	var artist, title string
 
-	f, err := os.Open(ruta)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", "", err
 	}
 	defer f.Close()
 
 	if meta, err := tag.ReadFrom(f); err == nil {
-		artista = strings.TrimSpace(meta.Artist())
-		titulo = strings.TrimSpace(meta.Title())
-	} else if err != nil && err != tag.ErrNoTagsFound {
-		// No es un error fatal: probamos con el nombre del archivo.
-		fmt.Printf("⚠ Sin metadatos legibles en %s: %v\n", filepath.Base(ruta), err)
+		artist = strings.TrimSpace(meta.Artist())
+		title = strings.TrimSpace(meta.Title())
+	} else if err != tag.ErrNoTagsFound {
+		// Not fatal: we still try the file name.
+		fmt.Printf("⚠ No readable tags in %s: %v\n", filepath.Base(path), err)
 	}
 
-	if artista == "" || titulo == "" {
-		if a, t := desdeNombreArchivo(ruta); a != "" && t != "" {
-			if artista == "" {
-				artista = a
+	if artist == "" || title == "" {
+		if a, t := fromFileName(path); a != "" && t != "" {
+			if artist == "" {
+				artist = a
 			}
-			if titulo == "" {
-				titulo = t
+			if title == "" {
+				title = t
 			}
 		}
 	}
 
-	return artista, titulo, nil
+	return artist, title, nil
 }
 
-// desdeNombreArchivo intenta separar "Artista - Título" del nombre del archivo.
-func desdeNombreArchivo(ruta string) (string, string) {
-	base := strings.TrimSuffix(filepath.Base(ruta), filepath.Ext(ruta))
-	base = strings.TrimSpace(base)
+// fromFileName tries to split "Artist - Title" from the current file name.
+func fromFileName(path string) (string, string) {
+	base := strings.TrimSpace(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
 
-	if partes := strings.SplitN(base, " - ", 2); len(partes) == 2 {
-		return strings.TrimSpace(partes[0]), strings.TrimSpace(partes[1])
+	if parts := strings.SplitN(base, " - ", 2); len(parts) == 2 {
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 	}
-	if partes := reGuiones.Split(base, 2); len(partes) == 2 {
-		return strings.TrimSpace(partes[0]), strings.TrimSpace(partes[1])
+	if parts := dashes.Split(base, 2); len(parts) == 2 {
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 	}
 	return "", ""
 }
 
-// nombreLibre evita sobrescribir archivos y colisiones dentro de la misma ejecución.
-func nombreLibre(destino string, usados map[string]bool) string {
-	clave := strings.ToLower(destino)
-	if !usados[clave] && !existe(destino) {
-		usados[clave] = true
-		return destino
+// freeName avoids overwriting files and collisions within the same run.
+func freeName(destination string, used map[string]bool) string {
+	key := strings.ToLower(destination)
+	if !used[key] && !exists(destination) {
+		used[key] = true
+		return destination
 	}
 
-	ext := filepath.Ext(destino)
-	base := strings.TrimSuffix(destino, ext)
+	ext := filepath.Ext(destination)
+	base := strings.TrimSuffix(destination, ext)
 	for i := 2; ; i++ {
-		candidato := fmt.Sprintf("%s (%d)%s", base, i, ext)
-		claveCandidato := strings.ToLower(candidato)
-		if usados[claveCandidato] || existe(candidato) {
+		candidate := fmt.Sprintf("%s (%d)%s", base, i, ext)
+		candidateKey := strings.ToLower(candidate)
+		if used[candidateKey] || exists(candidate) {
 			continue
 		}
-		usados[claveCandidato] = true
-		fmt.Printf("⚠ Ya existe un archivo con el nombre destino, se usa: %s\n", filepath.Base(candidato))
-		return candidato
+		used[candidateKey] = true
+		fmt.Printf("⚠ Target name already exists, using: %s\n", filepath.Base(candidate))
+		return candidate
 	}
 }
 
-func existe(ruta string) bool {
-	_, err := os.Stat(ruta)
+func exists(path string) bool {
+	_, err := os.Stat(path)
 	return err == nil
 }
 
-// yaNombrado indica si el archivo ya se llama como el destino o como una
-// variante numerada del mismo ("Nombre (2).ext"), para no renombrarlo en bucle.
-func yaNombrado(ruta, destino string) bool {
-	if strings.EqualFold(filepath.Clean(ruta), filepath.Clean(destino)) {
+// alreadyNamed reports whether the file is already named like the destination
+// or like a numbered variant of it ("Name (2).ext"), so it is not renamed in a
+// loop.
+func alreadyNamed(path, destination string) bool {
+	if strings.EqualFold(filepath.Clean(path), filepath.Clean(destination)) {
 		return true
 	}
-	if !strings.EqualFold(filepath.Ext(ruta), filepath.Ext(destino)) {
+	if !strings.EqualFold(filepath.Ext(path), filepath.Ext(destination)) {
 		return false
 	}
-	baseDestino := strings.TrimSuffix(filepath.Base(destino), filepath.Ext(destino))
-	baseActual := strings.TrimSpace(strings.TrimSuffix(filepath.Base(ruta), filepath.Ext(ruta)))
-	if strings.EqualFold(baseActual, baseDestino) {
+	destinationBase := strings.TrimSuffix(filepath.Base(destination), filepath.Ext(destination))
+	currentBase := strings.TrimSpace(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	if strings.EqualFold(currentBase, destinationBase) {
 		return true
 	}
-	return reSufijoNumerado.MatchString(baseActual) &&
-		strings.EqualFold(subSufijoNumerado.ReplaceAllString(baseActual, ""), baseDestino)
+	return numberedSuffix.MatchString(currentBase) &&
+		strings.EqualFold(numberedSuffixStrip.ReplaceAllString(currentBase, ""), destinationBase)
 }
 
-func pausa() {
+func pause() {
 	info, err := os.Stdin.Stat()
 	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
 		return
 	}
-	fmt.Print("\nPulsa Enter para salir...")
+	fmt.Print("\nPress Enter to exit...")
 	bufio.NewReader(os.Stdin).ReadString('\n')
 }

@@ -1,54 +1,59 @@
 # RenameSongs
 
-Renombra archivos de audio a `Artista - Título.ext` usando los metadatos
-incrustados en cada archivo. Funciona en Windows (probado en Windows 10/11),
-macOS y Linux.
+Renames audio files to `Artist - Title.ext` using the metadata embedded in
+each file. Works on Windows (tested on Windows 10/11), macOS and Linux.
 
-## Uso
+## Usage
 
 ```
-renombrar_canciones.exe                       # renombra la carpeta Descargas
-renombrar_canciones.exe "C:\Musica\EDM"       # renombra esa carpeta
-renombrar_canciones.exe "C:\Musica\EDM" -n    # simulación, no toca archivos
-renombrar_canciones.exe "C:\Musica" -r        # incluye subcarpetas
+renombrar_canciones.exe                       # renames the Downloads folder
+renombrar_canciones.exe "C:\Music\EDM"        # renames that folder
+renombrar_canciones.exe "C:\Music\EDM" -n     # dry run, touches nothing
+renombrar_canciones.exe "C:\Music" -r         # includes subfolders
 ```
 
-Las opciones se pueden escribir antes o después de la ruta.
+Options can be written before or after the path.
 
-| Opción | Alias | Descripción |
+| Option | Alias | Description |
 | --- | --- | --- |
-| `--dry-run` | `-n` | Muestra los cambios sin renombrar nada |
-| `--recursive` | `-r` | Procesa también las subcarpetas |
-| `--version` | | Muestra la versión y sale |
+| `--dry-run` | `-n` | Shows the changes without renaming anything |
+| `--recursive` | `-r` | Also processes subfolders |
+| `--version` | | Prints the version and exits |
 
-## Qué hace
+## What it does
 
-1. Lee las etiquetas del archivo con [dhowden/tag](https://github.com/dhowden/tag).
-2. Si faltan artista o título, intenta deducirlos del nombre actual (`Artista - Título.ext`).
-3. Limpia caracteres inválidos de Windows (`/`, `:`, `*`, `?`, `"`, `<`, `>`, `|`).
-4. Renombra el archivo y muestra un resumen al final.
+1. Reads the file tags with [dhowden/tag](https://github.com/dhowden/tag).
+2. If artist or title are missing, tries to infer them from the current name
+   (`Artist - Title.ext`).
+3. Cleans characters that are invalid on Windows (`/`, `:`, `*`, `?`, `"`,
+   `<`, `>`, `|`).
+4. Renames the file and prints a summary at the end.
 
-Extensiones soportadas: `.mp3`, `.flac`, `.m4a`, `.mp4`, `.ogg`, `.oga`, `.opus`,
+Supported extensions: `.mp3`, `.flac`, `.m4a`, `.mp4`, `.ogg`, `.oga`, `.opus`,
 `.wav`, `.aac`, `.wma`, `.aiff`, `.ape`.
 
-## Seguridad
+## Safety
 
-- Nunca sobrescribe: si el destino ya existe añade un número (`(2)`, `(3)`, ...).
-- Es idempotente: un archivo ya bien nombrado se omite en ejecuciones posteriores.
-- Evita nombres reservados de Windows (`CON`, `NUL`, `COM1`, ...).
-- Recorta nombres largos para no superar el límite de 255 bytes.
+- Never overwrites: if the target name already exists it appends a number
+  (`(2)`, `(3)`, ...).
+- Idempotent: a file that is already correctly named is skipped on later runs.
+- Avoids Windows reserved names (`CON`, `NUL`, `COM1`, ...).
+- Truncates long names so they do not exceed the 255-byte limit.
+- Exits with a non-zero status if any error occurred.
 
-## Compilar
+## Build
 
 ```
 go build -trimpath -ldflags "-s -w" -o renombrar_canciones.exe .
 ```
 
-## Descargar
+Requires Go 1.22 or newer.
 
-El ejecutable para Windows está en la sección
-[Releases](../../releases/latest).
+## Download
 
-## Licencia
+The Windows executable is available in the
+[Releases](../../releases/latest) section.
+
+## License
 
 MIT
