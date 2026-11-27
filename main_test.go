@@ -87,6 +87,13 @@ func TestFreeNameDoesNotOverwrite(t *testing.T) {
 	}
 }
 
+func TestExecutableFolder(t *testing.T) {
+	folder := executableFolder()
+	if folder == "" || !filepath.IsAbs(folder) {
+		t.Errorf("executableFolder = %q", folder)
+	}
+}
+
 func TestReorderArgs(t *testing.T) {
 	got := reorderArgs([]string{"folder", "--dry-run", "-r"})
 	want := []string{"--dry-run", "-r", "folder"}

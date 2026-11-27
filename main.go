@@ -17,7 +17,7 @@ import (
 
 const (
 	appName = "rename_songs"
-	version = "1.2.0"
+	version = "1.3.0"
 )
 
 // validExtensions lists the audio formats we attempt to process.
@@ -52,6 +52,9 @@ var (
 
 	// Matches a leading track number such as "01. ", "01 - " or "01)".
 	trackPrefix = regexp.MustCompile(`^(\d{1,3})\s*[.)\-]\s*`)
+
+	// Matches a trailing release year such as "Song (2019)" or "Song [2019]".
+	yearSuffix = regexp.MustCompile(`[\(\[]((?:19|20)\d{2})[\)\]]$`)
 )
 
 // reservedNames are device names Windows refuses to use for files.
@@ -70,13 +73,17 @@ func main() {
 	recursiveShort := flag.Bool("r", false, "alias of --recursive")
 	audit := flag.Bool("audit", false, "list metadata problems without changing anything")
 	noTags := flag.Bool("no-tags", false, "only rename; do not repair metadata")
-	forceTags := flag.Bool("force-tags", false, "overwrite tags that differ from the file name")
+	forceTags := flag.Bool("force-tags", true, "make tags agree with the file name (use --force-tags=false to keep existing tags)")
 	backup := flag.Bool("backup", false, "keep a .bak copy before writing tags")
-	genreFromFolder := flag.Bool("genre-from-folder", false, "fill an empty genre with the folder name")
+	albumFromFolder := flag.Bool("album-from-folder", true, "fill an empty album with the folder name (use =false to disable)")
+	genreFromFolder := flag.Bool("genre-from-folder", true, "fill an empty genre with the folder name (use =false to disable)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [folder] [options]\n", appName)
-		fmt.Fprintln(flag.CommandLine.Output(), "Without a folder, uses Downloads.")
+		fmt.Fprintln(flag.CommandLine.Output(),
+			"Without a folder, it fixes and renames the audio files in the folder\n"+
+				"that contains the executable. Drop rename_songs.exe in a music folder\n"+
+				"and double-click it, or pass another folder as the argument.")
 		flag.PrintDefaults()
 	}
 
@@ -94,10 +101,14 @@ func main() {
 	folder := flag.Arg(0)
 	noFolder := folder == ""
 	if noFolder {
-		folder = downloadsFolder()
+		folder = executableFolder()
 	}
 
 	fmt.Printf("Folder: %s\n\n", folder)
+
+	if *noTags {
+		*forceTags = false
+	}
 
 	opts := options{
 		dryRun:          *dryRun || *dryRunShort,
@@ -106,6 +117,7 @@ func main() {
 		fixTags:         !*noTags,
 		forceTags:       *forceTags,
 		backup:          *backup,
+		albumFromFolder: *albumFromFolder,
 		genreFromFolder: *genreFromFolder,
 	}
 
@@ -139,13 +151,17 @@ func reorderArgs(args []string) []string {
 	return append(options, positionals...)
 }
 
-// downloadsFolder returns the current user's Downloads folder.
-func downloadsFolder() string {
-	home, err := os.UserHomeDir()
+// executableFolder returns the folder that contains the running binary, so a
+// double click fixes the files sitting next to rename_songs.exe.
+func executableFolder() string {
+	exe, err := os.Executable()
 	if err != nil {
 		return "."
 	}
-	return filepath.Join(home, "Downloads")
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Dir(exe)
 }
 
 // cleanName replaces characters that are invalid in file names and
@@ -195,7 +211,8 @@ func limitName(name string) string {
 }
 
 type options struct {
-	dryRun, recursive, audit, fixTags, forceTags, backup, genreFromFolder bool
+	dryRun, recursive, audit, fixTags, forceTags, backup bool
+	albumFromFolder, genreFromFolder                     bool
 }
 
 type stats struct {
@@ -260,17 +277,22 @@ func process(folder string, opts options) stats {
 		}
 
 		inferred := parseFileName(path)
+		planOpts := planOptions{
+			forceTags:       opts.forceTags,
+			albumFromFolder: opts.albumFromFolder,
+			genreFromFolder: opts.genreFromFolder,
+		}
 
 		if opts.audit {
-			reportAudit(path, current, inferred, &result)
+			reportAudit(path, current, inferred, filepath.Dir(path), planOpts, &result)
 			continue
 		}
 
 		if opts.fixTags {
-			updated, changes := planTags(current, inferred, filepath.Base(filepath.Dir(path)),
-				planOptions{forceTags: opts.forceTags, genreFromFolder: opts.genreFromFolder})
+			updated, changes := planTags(current, inferred, filepath.Dir(path), planOpts)
 			switch {
 			case len(changes) == 0:
+				current = updated
 			case opts.dryRun:
 				fmt.Printf("[Dry run] tags in %s: %s\n", name, describeChanges(changes))
 				current = updated
@@ -284,8 +306,10 @@ func process(folder string, opts options) stats {
 				} else {
 					fmt.Printf("✓ Tags updated in %s: %s\n", name, describeChanges(changes))
 					result.tagsWritten++
-					current = updated
 				}
+				// Rename from the planned metadata even when the write failed, so
+				// the file name always matches what the tool decided is correct.
+				current = updated
 			}
 		}
 
@@ -337,15 +361,21 @@ func process(folder string, opts options) stats {
 	return result
 }
 
-// reportAudit prints the metadata problems of one file and counts them.
-func reportAudit(path string, current tagSet, inferred fileNameInfo, result *stats) {
-	missing := current.missingFields()
-	mismatch := current.mismatches(inferred)
-	if len(missing) == 0 && len(mismatch) == 0 {
+// reportAudit prints the metadata problems of one file and counts them. It
+// runs the same repair plan used when writing, so the report shows what would
+// be fixed and what would still be missing.
+func reportAudit(path string, current tagSet, inferred fileNameInfo, folder string, planOpts planOptions, result *stats) {
+	planned, changes := planTags(current, inferred, folder, planOpts)
+	missing := planned.missingFields()
+	mismatch := planned.mismatches(inferred)
+	if len(missing) == 0 && len(mismatch) == 0 && len(changes) == 0 {
 		return
 	}
 
 	var parts []string
+	if len(changes) > 0 {
+		parts = append(parts, "would fix "+describeChanges(changes))
+	}
 	if len(missing) > 0 {
 		parts = append(parts, "missing "+strings.Join(missing, ", "))
 	}
@@ -413,6 +443,13 @@ func parseFileName(path string) fileNameInfo {
 	}
 
 	result.Artist, result.Title = splitArtistTitle(base)
+	if result.Title != "" {
+		if match := yearSuffix.FindStringSubmatch(result.Title); match != nil {
+			if year, err := strconv.Atoi(match[1]); err == nil {
+				result.Year = year
+			}
+		}
+	}
 	return result
 }
 

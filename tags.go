@@ -33,6 +33,7 @@ type fileNameInfo struct {
 	Artist string
 	Title  string
 	Track  int
+	Year   int
 }
 
 type change struct {
@@ -53,10 +54,9 @@ func readTags(path string) (tagSet, error) {
 
 	meta, err := tag.ReadFrom(f)
 	if err != nil {
-		if err == tag.ErrNoTagsFound {
-			return result, nil
-		}
-		return result, err
+		// A missing or unreadable tag must not block the repair: the file name
+		// still gives us artist and title, and the ID3 writer rebuilds the tag.
+		return result, nil
 	}
 
 	result.Artist = strings.TrimSpace(meta.Artist())
@@ -130,79 +130,199 @@ func sameName(a, b string) bool {
 
 type planOptions struct {
 	forceTags       bool
+	albumFromFolder bool
 	genreFromFolder bool
 }
 
-// planTags decides which fields can be filled or corrected from local
-// evidence (file name and folder name). It never invents album or year.
-func planTags(current tagSet, fn fileNameInfo, folder string, opts planOptions) (tagSet, []change) {
-	updated := current
+// tagEditor applies tag changes to a clean copy of the current tags.
+type tagEditor struct {
+	tags    tagSet
+	changes []change
+	force   bool
+}
+
+// newTagEditor normalizes the stored values and keeps the cleaning as changes.
+func newTagEditor(current tagSet, force bool) *tagEditor {
+	cleaned, cleaning := cleanTags(current)
+	return &tagEditor{tags: cleaned, changes: cleaning, force: force}
+}
+
+func (e *tagEditor) textValue(field string) string {
+	switch field {
+	case "artist":
+		return e.tags.Artist
+	case "title":
+		return e.tags.Title
+	case "album":
+		return e.tags.Album
+	case "album artist":
+		return e.tags.AlbumArtist
+	case "genre":
+		return e.tags.Genre
+	}
+	return ""
+}
+
+func (e *tagEditor) text(field string, value string) {
+	value = cleanTagText(value)
+	if value == "" {
+		return
+	}
+	old := e.textValue(field)
+	if old == value || (old != "" && !e.force) {
+		return
+	}
+	switch field {
+	case "artist":
+		e.tags.Artist = value
+	case "title":
+		e.tags.Title = value
+	case "album":
+		e.tags.Album = value
+	case "album artist":
+		e.tags.AlbumArtist = value
+	case "genre":
+		e.tags.Genre = value
+	default:
+		return
+	}
+	e.changes = append(e.changes, change{Field: field, Old: old, New: value})
+}
+
+func (e *tagEditor) number(field string, value int) {
+	if value <= 0 {
+		return
+	}
+	var old int
+	switch field {
+	case "track":
+		old = e.tags.Track
+	case "year":
+		old = e.tags.Year
+	default:
+		return
+	}
+	if old == value || (old != 0 && !e.force) {
+		return
+	}
+	switch field {
+	case "track":
+		e.tags.Track = value
+	case "year":
+		e.tags.Year = value
+	}
+	e.changes = append(e.changes, change{Field: field, Old: strconv.Itoa(old), New: strconv.Itoa(value)})
+}
+
+// cleanTagText normalizes a stored value: no stray spaces, no leftover file
+// extension, no doubled whitespace.
+func cleanTagText(text string) string {
+	text = strings.TrimSpace(text)
+	text = spaces.ReplaceAllString(text, " ")
+	lower := strings.ToLower(text)
+	for ext := range validExtensions {
+		if strings.HasSuffix(lower, ext) && len(text) > len(ext) {
+			text = strings.TrimSpace(text[:len(text)-len(ext)])
+			break
+		}
+	}
+	return text
+}
+
+// cleanTags fixes values that are clearly damaged before they are compared
+// with the file name, and reports each fix as a change.
+func cleanTags(current tagSet) (tagSet, []change) {
+	cleaned := current
+	cleaned.Artist = cleanTagText(current.Artist)
+	cleaned.Title = cleanTagText(current.Title)
+	cleaned.Album = cleanTagText(current.Album)
+	cleaned.AlbumArtist = cleanTagText(current.AlbumArtist)
+	cleaned.Genre = cleanTagText(current.Genre)
+
+	// Some taggers keep the whole "Artist - Title" inside the title field.
+	if artist, title := splitArtistTitle(cleaned.Title); artist != "" && title != "" && sameName(artist, cleaned.Artist) {
+		cleaned.Title = title
+	}
+
 	var changes []change
-
-	setText := func(field string, old string, value string) {
-		if value == "" {
-			return
-		}
-		if old == value || (old != "" && !opts.forceTags) {
-			return
-		}
-		changes = append(changes, change{Field: field, Old: old, New: value})
-		switch field {
-		case "artist":
-			updated.Artist = value
-		case "title":
-			updated.Title = value
-		case "album artist":
-			updated.AlbumArtist = value
-		case "album":
-			updated.Album = value
-		case "genre":
-			updated.Genre = value
+	record := func(field, before, after string) {
+		if before != after {
+			changes = append(changes, change{Field: field, Old: before, New: after})
 		}
 	}
+	record("artist", current.Artist, cleaned.Artist)
+	record("title", current.Title, cleaned.Title)
+	record("album", current.Album, cleaned.Album)
+	record("album artist", current.AlbumArtist, cleaned.AlbumArtist)
+	record("genre", current.Genre, cleaned.Genre)
+	return cleaned, changes
+}
 
-	setNumber := func(field string, old int, value int) {
-		if value <= 0 {
-			return
-		}
-		if old == value || (old != 0 && !opts.forceTags) {
-			return
-		}
-		changes = append(changes, change{Field: field, Old: strconv.Itoa(old), New: strconv.Itoa(value)})
-		switch field {
-		case "track":
-			updated.Track = value
-		case "year":
-			updated.Year = value
-		}
+// planTags decides which fields can be filled or corrected from local
+// evidence: the file name first, then the folder name. It never invents a
+// track total.
+func planTags(current tagSet, fn fileNameInfo, folder string, opts planOptions) (tagSet, []change) {
+	editor := newTagEditor(current, opts.forceTags)
+
+	editor.text("artist", fn.Artist)
+	editor.text("title", fn.Title)
+	editor.number("track", fn.Track)
+
+	if editor.tags.AlbumArtist == "" {
+		editor.text("album artist", editor.tags.Artist)
+	}
+	if editor.tags.Album == "" && opts.albumFromFolder {
+		editor.text("album", albumForFolder(folder))
+	}
+	if editor.tags.Genre == "" && opts.genreFromFolder {
+		editor.text("genre", genreForFolder(folder))
+	}
+	// A year found in the file name is weak evidence, so it only fills a gap.
+	if editor.tags.Year == 0 {
+		editor.number("year", fn.Year)
 	}
 
-	setText("artist", current.Artist, fn.Artist)
-	setText("title", current.Title, fn.Title)
-	setNumber("track", current.Track, fn.Track)
+	return editor.tags, editor.changes
+}
 
-	if updated.AlbumArtist == "" {
-		setText("album artist", "", updated.Artist)
+// genericFolders describe a container, not an album or a genre.
+var genericFolders = map[string]bool{
+	".": true, "..": true, "downloads": true, "music": true, "musica": true,
+	"música": true, "playlists": true, "diferentes": true, "tonazo": true,
+	"new folder": true, "temp": true, "tmp": true, "desktop": true,
+	"renamesongs": true,
+}
+
+// folderLabel returns the folder name when it carries meaning, or "" when it
+// is just a container such as Downloads or a drive root.
+func folderLabel(folder string) string {
+	name := strings.TrimSpace(folder)
+	if name == "" {
+		return ""
 	}
-
-	if updated.Genre == "" && opts.genreFromFolder {
-		if genre := genreForFolder(folder); genre != "" {
-			setText("genre", "", genre)
-		}
+	name = strings.TrimSpace(filepath.Base(name))
+	if name == "." || name == ".." || name == string(filepath.Separator) {
+		return ""
 	}
+	if filepath.VolumeName(name) != "" {
+		return ""
+	}
+	if genericFolders[strings.ToLower(name)] {
+		return ""
+	}
+	return name
+}
 
-	return updated, changes
+// albumForFolder uses the folder name as the album only when the folder has a
+// meaningful name.
+func albumForFolder(folder string) string {
+	return folderLabel(folder)
 }
 
 // genreForFolder maps a folder name to a readable genre, skipping folders that
 // are not genres.
 func genreForFolder(folder string) string {
-	name := strings.TrimSpace(folder)
-	switch strings.ToLower(name) {
-	case "", "playlists", "diferentes", "tonazo", "musica", "music", "downloads":
-		return ""
-	}
-	return name
+	return folderLabel(folder)
 }
 
 // writeTags writes the given fields back to the file. Only MP3 (ID3v2) is

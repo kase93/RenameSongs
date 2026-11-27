@@ -1,7 +1,7 @@
 # RenameSongs
 
-Renames audio files to `Artist - Title.ext` and repairs the metadata embedded
-in each file, so the tags are right even if you never look at them.
+Fixes the metadata of every audio file in a folder and renames it to
+`Artist - Title.ext`, so tags and file names agree.
 
 Built for Windows 11 (tested there). It runs inside the console; there is no
 installer and no GUI.
@@ -10,18 +10,22 @@ installer and no GUI.
 
 Most music libraries have the information the player shows, but not the
 information the files actually store: missing artist, missing track number,
-no album artist, empty genre. RenameSongs reads every field first, fills what
-it can prove from the file name and folder, then renames the file.
+no album artist, empty genre, or a title that contains the whole file name.
+RenameSongs reads every field, repairs what it can prove from the file name
+and the folder, writes it back, and only then renames the file.
 
 ## Usage
 
+Put `rename_songs.exe` in the folder you want to fix and double-click it:
+with no argument it works on the folder that contains the executable.
+
 ```
-rename_songs.exe                                  # rename + repair the Downloads folder
-rename_songs.exe "C:\Music\Clasicos"              # one folder
-rename_songs.exe "C:\Music" -r                    # every subfolder
-rename_songs.exe "C:\Music" -r --audit            # report only, changes nothing
-rename_songs.exe "C:\Music\Clasicos" -n           # show what would happen
-rename_songs.exe "C:\Music" -r --backup           # keep a .bak next to each edited file
+rename_songs.exe                          # fix + rename the folder holding the exe
+rename_songs.exe "C:\Music\Clasicos"      # one folder
+rename_songs.exe "C:\Music" -r            # every subfolder
+rename_songs.exe "C:\Music" -r --audit    # report only, changes nothing
+rename_songs.exe "C:\Music\Clasicos" -n   # show what would happen
+rename_songs.exe "C:\Music" -r --backup   # keep a .bak next to each edited file
 ```
 
 Options can go before or after the folder.
@@ -30,29 +34,33 @@ Options can go before or after the folder.
 | --- | --- | --- |
 | `--dry-run` | `-n` | Prints planned tag changes and renames, writes nothing |
 | `--recursive` | `-r` | Also processes subfolders |
-| `--audit` | | Lists missing or mismatched metadata per file and exits |
+| `--audit` | | Lists what would be fixed, per file, and exits |
 | `--no-tags` | | Only renames, leaves tags untouched |
-| `--force-tags` | | Overwrites tags that differ from the file name |
+| `--force-tags` | | Tags follow the file name (default `true`; use `=false` to keep existing tags) |
+| `--album-from-folder` | | Fills an empty album with the folder name (default `true`) |
+| `--genre-from-folder` | | Fills an empty genre with the folder name (default `true`) |
 | `--backup` | | Keeps `<file>.bak` before writing tags |
-| `--genre-from-folder` | | Fills an empty genre with the folder name |
 | `--version` | | Prints the version and exits |
 
 ## What it does
 
 1. Reads every supported field: artist, title, album, album artist, track,
    year and genre.
-2. Fills what can be inferred without guessing:
-   - empty `artist` and `title` from the file name (`Artist - Title.ext`);
-   - leading track numbers such as `01. `, `01 - ` or `01)`;
+2. Cleans damaged values: whitespace, a trailing file extension inside the
+   title, and a title that still holds the whole `Artist - Title`.
+3. Makes the tags agree with the file name: `artist`, `title` and a leading
+   track number (`01. `, `01 - `, `01)`).
+4. Fills the remaining gaps without guessing:
    - empty `album artist` from the artist;
-   - empty `genre` from the folder name, only with `--genre-from-folder`.
-3. With `--force-tags`, replaces artist/title/track when the tag disagrees
-   with the file name.
-4. Writes the repaired MP3 tag, then renames the file.
-5. Prints what changed and which fields are still missing.
+   - empty `album` from the folder name;
+   - empty `genre` from the folder name;
+   - empty `year` from a trailing `(2019)` or `[2019]` in the title.
+5. Writes the repaired MP3 tag, then renames the file to
+   `Artist - Title.ext`.
+6. Prints what changed and which fields are still missing.
 
-It never invents album or year: those stay empty when the file does not have
-them. Run `--audit` to see how many files still lack them.
+Folder names that say nothing (`Downloads`, `Music`, `Playlists`, drive roots)
+are ignored, so they never become an album or a genre.
 
 Supported extensions: `.mp3`, `.flac`, `.m4a`, `.mp4`, `.ogg`, `.oga`, `.opus`,
 `.wav`, `.aac`, `.wma`, `.aiff`, `.ape`.
