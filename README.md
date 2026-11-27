@@ -1,58 +1,94 @@
 # RenameSongs
 
-Renames audio files to `Artist - Title.ext` using the metadata embedded in
-each file. Works on Windows (tested on Windows 10/11), macOS and Linux.
+Renames audio files to `Artist - Title.ext` and repairs the metadata embedded
+in each file, so the tags are right even if you never look at them.
+
+Built for Windows 11 (tested there). It runs inside the console; there is no
+installer and no GUI.
+
+## Why
+
+Most music libraries have the information the player shows, but not the
+information the files actually store: missing artist, missing track number,
+no album artist, empty genre. RenameSongs reads every field first, fills what
+it can prove from the file name and folder, then renames the file.
 
 ## Usage
 
 ```
-renombrar_canciones.exe                       # renames the Downloads folder
-renombrar_canciones.exe "C:\Music\EDM"        # renames that folder
-renombrar_canciones.exe "C:\Music\EDM" -n     # dry run, touches nothing
-renombrar_canciones.exe "C:\Music" -r         # includes subfolders
+rename_songs.exe                                  # rename + repair the Downloads folder
+rename_songs.exe "C:\Music\Clasicos"              # one folder
+rename_songs.exe "C:\Music" -r                    # every subfolder
+rename_songs.exe "C:\Music" -r --audit            # report only, changes nothing
+rename_songs.exe "C:\Music\Clasicos" -n           # show what would happen
+rename_songs.exe "C:\Music" -r --backup           # keep a .bak next to each edited file
 ```
 
-Options can be written before or after the path.
+Options can go before or after the folder.
 
 | Option | Alias | Description |
 | --- | --- | --- |
-| `--dry-run` | `-n` | Shows the changes without renaming anything |
+| `--dry-run` | `-n` | Prints planned tag changes and renames, writes nothing |
 | `--recursive` | `-r` | Also processes subfolders |
+| `--audit` | | Lists missing or mismatched metadata per file and exits |
+| `--no-tags` | | Only renames, leaves tags untouched |
+| `--force-tags` | | Overwrites tags that differ from the file name |
+| `--backup` | | Keeps `<file>.bak` before writing tags |
+| `--genre-from-folder` | | Fills an empty genre with the folder name |
 | `--version` | | Prints the version and exits |
 
 ## What it does
 
-1. Reads the file tags with [dhowden/tag](https://github.com/dhowden/tag).
-2. If artist or title are missing, tries to infer them from the current name
-   (`Artist - Title.ext`).
-3. Cleans characters that are invalid on Windows (`/`, `:`, `*`, `?`, `"`,
-   `<`, `>`, `|`).
-4. Renames the file and prints a summary at the end.
+1. Reads every supported field: artist, title, album, album artist, track,
+   year and genre.
+2. Fills what can be inferred without guessing:
+   - empty `artist` and `title` from the file name (`Artist - Title.ext`);
+   - leading track numbers such as `01. `, `01 - ` or `01)`;
+   - empty `album artist` from the artist;
+   - empty `genre` from the folder name, only with `--genre-from-folder`.
+3. With `--force-tags`, replaces artist/title/track when the tag disagrees
+   with the file name.
+4. Writes the repaired MP3 tag, then renames the file.
+5. Prints what changed and which fields are still missing.
+
+It never invents album or year: those stay empty when the file does not have
+them. Run `--audit` to see how many files still lack them.
 
 Supported extensions: `.mp3`, `.flac`, `.m4a`, `.mp4`, `.ogg`, `.oga`, `.opus`,
 `.wav`, `.aac`, `.wma`, `.aiff`, `.ape`.
 
+Tag **writing** is implemented for MP3 (ID3v2.3 and ID3v2.4). Other formats are
+still renamed and audited; when they need tag changes the tool reports it
+instead of touching them.
+
+## How tags are written
+
+The tag is edited frame by frame, not decoded and rebuilt. Existing frames
+such as cover art are copied byte for byte, so pictures and UTF-16 text survive
+the edit. The new file is written to a temporary file, read back to verify it,
+and only then replaces the original. With `--backup`, a `.bak` copy is left
+behind.
+
 ## Safety
 
-- Never overwrites: if the target name already exists it appends a number
-  (`(2)`, `(3)`, ...).
-- Idempotent: a file that is already correctly named is skipped on later runs.
+- Never overwrites: an existing target gets `(2)`, `(3)`, ...
+- Idempotent: correctly named files with complete tags are skipped.
 - Avoids Windows reserved names (`CON`, `NUL`, `COM1`, ...).
-- Truncates long names so they do not exceed the 255-byte limit.
+- Truncates long names to the 255-byte limit.
 - Exits with a non-zero status if any error occurred.
 
 ## Build
 
 ```
-go build -trimpath -ldflags "-s -w" -o renombrar_canciones.exe .
+go build -trimpath -ldflags "-s -w" -o rename_songs.exe .
 ```
 
 Requires Go 1.22 or newer.
 
 ## Download
 
-The Windows executable is available in the
-[Releases](../../releases/latest) section.
+The Windows 11 executable is attached to the
+[latest release](../../releases/latest).
 
 ## License
 

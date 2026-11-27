@@ -1,3 +1,4 @@
-renombrar_canciones.exe
+rename_songs.exe
 *.exe
+*.bak
 dist/
