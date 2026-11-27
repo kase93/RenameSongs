@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Tests
+        run: go test ./...
+
+      - name: Compilar Windows
+        run: |
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o renombrar_canciones.exe .
+
+      - name: Compilar Linux
+        run: GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o renombrar_canciones-linux-amd64 .
+
+      - name: Compilar macOS
+        run: GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o renombrar_canciones-macos-arm64 .
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            renombrar_canciones.exe
+            renombrar_canciones-linux-amd64
+            renombrar_canciones-macos-arm64
+          generate_release_notes: true
