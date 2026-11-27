@@ -76,13 +76,13 @@ func TestFreeNameDoesNotOverwrite(t *testing.T) {
 	}
 
 	used := map[string]bool{}
-	free := freeName(target, used)
+	free, _ := freeName(target, used, false)
 	if filepath.Base(free) != "Artist - Song (2).mp3" {
 		t.Errorf("freeName = %q, want \"Artist - Song (2).mp3\"", filepath.Base(free))
 	}
 
 	// A second file with the same name must get (3).
-	if second := freeName(target, used); filepath.Base(second) != "Artist - Song (3).mp3" {
+	if second, _ := freeName(target, used, false); filepath.Base(second) != "Artist - Song (3).mp3" {
 		t.Errorf("second freeName = %q, want \"Artist - Song (3).mp3\"", filepath.Base(second))
 	}
 }
@@ -104,5 +104,18 @@ func TestReorderArgs(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("reorderArgs = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestFreeNameOverwritesWhenAsked(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "Artist - Song.mp3")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, replaced := freeName(target, map[string]bool{}, true)
+	if got != target || !replaced {
+		t.Fatalf("freeName(overwrite) = (%q, %v), want (%q, true)", got, replaced, target)
 	}
 }

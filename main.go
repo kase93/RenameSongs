@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -17,7 +18,7 @@ import (
 
 const (
 	appName = "rename_songs"
-	version = "1.3.0"
+	version = "1.5.0"
 )
 
 // validExtensions lists the audio formats we attempt to process.
@@ -75,6 +76,7 @@ func main() {
 	noTags := flag.Bool("no-tags", false, "only rename; do not repair metadata")
 	forceTags := flag.Bool("force-tags", true, "make tags agree with the file name (use --force-tags=false to keep existing tags)")
 	backup := flag.Bool("backup", false, "keep a .bak copy before writing tags")
+	overwrite := flag.Bool("overwrite", false, "replace a file that already has the target name instead of keeping both")
 	albumFromFolder := flag.Bool("album-from-folder", true, "fill an empty album with the folder name (use =false to disable)")
 	genreFromFolder := flag.Bool("genre-from-folder", true, "fill an empty genre with the folder name (use =false to disable)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -117,6 +119,7 @@ func main() {
 		fixTags:         !*noTags,
 		forceTags:       *forceTags,
 		backup:          *backup,
+		overwrite:       *overwrite,
 		albumFromFolder: *albumFromFolder,
 		genreFromFolder: *genreFromFolder,
 	}
@@ -211,15 +214,15 @@ func limitName(name string) string {
 }
 
 type options struct {
-	dryRun, recursive, audit, fixTags, forceTags, backup bool
-	albumFromFolder, genreFromFolder                     bool
+	dryRun, recursive, audit, fixTags, forceTags, backup, overwrite bool
+	albumFromFolder, genreFromFolder                                bool
 }
 
 type stats struct {
-	renamed, skipped, errors     int
-	tagsWritten, tagsUnsupported int
-	remaining                    map[string]int
-	remainingFiles               int
+	renamed, skipped, replaced, errors int
+	tagsWritten, tagsUnsupported       int
+	remaining                          map[string]int
+	remainingFiles                     int
 }
 
 // process walks the folder, repairs metadata and renames the audio files.
@@ -266,7 +269,21 @@ func process(folder string, opts options) stats {
 	// Target names already claimed during this run (case-insensitive).
 	used := map[string]bool{}
 
+	// Files that still have to be processed. With --overwrite a file can be
+	// removed because another file takes its name, and it must not be
+	// processed afterwards.
+	pending := make(map[string]bool, len(files))
 	for _, path := range files {
+		pending[strings.ToLower(path)] = true
+	}
+
+	for _, path := range files {
+		pathKey := strings.ToLower(path)
+		if !pending[pathKey] {
+			continue
+		}
+		delete(pending, pathKey)
+
 		name := filepath.Base(path)
 
 		current, err := readTags(path)
@@ -298,18 +315,23 @@ func process(folder string, opts options) stats {
 				current = updated
 			default:
 				err := writeTags(path, updated, changes, opts.backup)
-				if err == errUnsupportedFormat {
+				switch {
+				case errors.Is(err, errUnsupportedFormat):
+					// Nothing was written: the format has no writer. The file is
+					// still renamed from the repaired metadata, and the summary
+					// reports it as untouched.
 					result.tagsUnsupported++
-				} else if err != nil {
+					current = updated
+				case err != nil:
 					fmt.Printf("⚠ Could not write tags in %s: %v\n", name, err)
 					result.errors++
-				} else {
+					// Keep the tags that really are in the file, so the new name
+					// never claims metadata the file does not contain.
+				default:
 					fmt.Printf("✓ Tags updated in %s: %s\n", name, describeChanges(changes))
 					result.tagsWritten++
+					current = updated
 				}
-				// Rename from the planned metadata even when the write failed, so
-				// the file name always matches what the tool decided is correct.
-				current = updated
 			}
 		}
 
@@ -341,7 +363,11 @@ func process(folder string, opts options) stats {
 			continue
 		}
 
-		destination = freeName(destination, used)
+		destination, replaced := freeName(destination, used, opts.overwrite)
+		if replaced {
+			result.replaced++
+			delete(pending, strings.ToLower(destination))
+		}
 
 		if opts.dryRun {
 			fmt.Printf("[Dry run] %s  ->  %s\n", name, filepath.Base(destination))
@@ -400,8 +426,8 @@ func describeChanges(changes []change) string {
 // printSummary prints the final counters and the fields that could not be
 // filled automatically.
 func printSummary(result stats, opts options) {
-	fmt.Printf("\nSummary: %d renamed, %d skipped, %d errors\n",
-		result.renamed, result.skipped, result.errors)
+	fmt.Printf("\nSummary: %d renamed, %d skipped, %d replaced, %d errors\n",
+		result.renamed, result.skipped, result.replaced, result.errors)
 
 	if opts.fixTags || opts.audit {
 		fmt.Printf("Tags: %d updated", result.tagsWritten)
@@ -471,12 +497,18 @@ func splitArtistTitle(base string) (string, string) {
 	return "", ""
 }
 
-// freeName avoids overwriting files and collisions within the same run.
-func freeName(destination string, used map[string]bool) string {
+// freeName avoids collisions. With overwrite an existing file at the target
+// name is replaced (and reported); names claimed earlier in the same run are
+// still kept apart, so a file this run just produced is never destroyed.
+func freeName(destination string, used map[string]bool, overwrite bool) (string, bool) {
 	key := strings.ToLower(destination)
-	if !used[key] && !exists(destination) {
+	occupied := exists(destination)
+	if !used[key] && (!occupied || overwrite) {
 		used[key] = true
-		return destination
+		if occupied {
+			fmt.Printf("⚠ Replacing existing file: %s\n", filepath.Base(destination))
+		}
+		return destination, occupied
 	}
 
 	ext := filepath.Ext(destination)
@@ -489,7 +521,7 @@ func freeName(destination string, used map[string]bool) string {
 		}
 		used[candidateKey] = true
 		fmt.Printf("⚠ Target name already exists, using: %s\n", filepath.Base(candidate))
-		return candidate
+		return candidate, false
 	}
 }
 

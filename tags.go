@@ -169,7 +169,9 @@ func (e *tagEditor) text(field string, value string) {
 		return
 	}
 	old := e.textValue(field)
-	if old == value || (old != "" && !e.force) {
+	// sameName ignores differences that only exist because the value is stored
+	// in a file name, so forcing the tags does not degrade "AC/DC" to "ACDC".
+	if old == value || (old != "" && (!e.force || sameName(old, value))) {
 		return
 	}
 	switch field {

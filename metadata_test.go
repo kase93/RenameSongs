@@ -232,3 +232,84 @@ func TestParseFileNameYear(t *testing.T) {
 		t.Errorf("unexpected year: %+v", info)
 	}
 }
+
+func TestVerifyID3FileDetectsMissingFrame(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.mp3")
+	frames := []rawFrame{{id: "TIT2", body: textFrameBody(3, "Back In Black")}}
+	if err := os.WriteFile(path, buildID3(3, frames, []byte("AUDIOBYTES")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := tagSet{Artist: "AC/DC", Title: "Back In Black"}
+	changes := []change{{Field: "artist", New: "AC/DC"}}
+	if err := verifyID3File(path, changes, updated, len("AUDIOBYTES")); err == nil {
+		t.Fatal("a missing frame must fail verification")
+	}
+
+	// Once the frame is there, the same check must pass.
+	frames = append(frames, rawFrame{id: "TPE1", body: textFrameBody(3, "AC/DC")})
+	if err := os.WriteFile(path, buildID3(3, frames, []byte("AUDIOBYTES")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyID3File(path, changes, updated, len("AUDIOBYTES")); err != nil {
+		t.Fatalf("verification failed: %v", err)
+	}
+}
+
+func TestVerifyID3FileDetectsTruncatedAudio(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.mp3")
+	if err := os.WriteFile(path, buildID3(3, nil, []byte("AUDIO")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyID3File(path, nil, tagSet{}, len("AUDIOBYTES")); err == nil {
+		t.Fatal("a shortened audio payload must fail verification")
+	}
+}
+
+func TestSplitID3SkipsFooter(t *testing.T) {
+	version := byte(4)
+	frames := []rawFrame{{id: "TIT2", body: textFrameBody(version, "Back In Black")}}
+	tag := buildID3(version, frames, nil)
+	tag[5] |= 0x10 // footer present
+	footer := []byte("3DI\x04\x00\x10\x00\x00\x00\x00")
+	data := append(append(tag, footer...), []byte("AUDIOBYTES")...)
+
+	_, got, audio, err := splitID3(data)
+	if err != nil {
+		t.Fatalf("splitID3: %v", err)
+	}
+	if string(audio) != "AUDIOBYTES" {
+		t.Errorf("audio = %q, footer was not skipped", audio)
+	}
+	if len(got) != 1 || got[0].id != "TIT2" {
+		t.Errorf("frames = %+v", got)
+	}
+}
+
+func TestSplitID3KeepsFrameFlags(t *testing.T) {
+	version := byte(4)
+	frames := []rawFrame{{id: "APIC", flags: [2]byte{0, 1}, body: []byte{0, 1, 2, 3}}}
+	_, got, audio, err := splitID3(buildID3(version, frames, []byte("AUDIO")))
+	if err != nil {
+		t.Fatalf("splitID3: %v", err)
+	}
+	if got[0].flags != [2]byte{0, 1} {
+		t.Fatalf("flags = %v", got[0].flags)
+	}
+
+	_, again, _, err := splitID3(buildID3(version, got, audio))
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if again[0].flags != [2]byte{0, 1} {
+		t.Errorf("flags after rebuild = %v", again[0].flags)
+	}
+}
+
+func TestPlanTagsKeepsEquivalentArtist(t *testing.T) {
+	current := tagSet{Artist: "AC/DC", Title: "Back In Black"}
+	updated, _ := planTags(current, fileNameInfo{Artist: "AC-DC", Title: "Back In Black"}, "", planOptions{forceTags: true})
+	if updated.Artist != "AC/DC" {
+		t.Errorf("artist was degraded to %q", updated.Artist)
+	}
+}
