@@ -1,40 +1,13 @@
 # RenameSongs
 
-Reads the metadata of audio files, repairs MP3 tags, and renames every file to
-`Artist - Title.ext` so tags and file names agree. Windows 11, one `.exe`, no
-installer, no network.
+Reads the metadata of audio files, repairs MP3 tags, and renames every file to `Artist - Title`.
 
 ## Use
 
-Drop `rename_songs.exe` in a music folder and double-click it: it works on the
-folder that holds the executable. To use another folder, pass it as the
-argument (options can go before or after it):
-
-```
-rename_songs.exe "D:\Music\Album" --dry-run
-```
+Drop `rename_songs.exe` in a music folder and double-click it: it works on the folder that holds the executable.
 
 Tag repair only works on `.mp3`. Every other format is renamed, and its tags
 are read but not written; the summary counts those as "cannot be written".
-
-## Options
-
-| Option | Effect |
-| --- | --- |
-| `--dry-run`, `-n` | show the changes without writing anything |
-| `--audit` | list metadata problems without changing anything |
-| `--recursive`, `-r` | also process subfolders |
-| `--no-tags` | only rename; do not repair metadata |
-| `--force-tags=false` | keep existing tags and fill only empty fields (default is to make tags agree with the file name) |
-| `--backup` | keep a `.bak` copy before writing tags |
-| `--overwrite` | replace a file that already has the target name instead of keeping both |
-| `--album-from-folder=false` | do not fill an empty album from the folder name |
-| `--genre-from-folder=false` | do not fill an empty genre from the folder name |
-| `--version` | print the version and exit |
-
-When the target name is taken, the tool appends ` (2)`, ` (3)`, ... instead of
-overwriting. Files with no artist and no title in either the tags or the name
-are skipped. The exit code is `1` if any file failed.
 
 ## What it repairs
 
